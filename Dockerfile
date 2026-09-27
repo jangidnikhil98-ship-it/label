@@ -40,8 +40,9 @@ ENV COMPOSER_ALLOW_SUPERUSER=1
 # Install PHP dependencies
 RUN composer install --no-interaction --prefer-dist --optimize-autoloader --no-dev
 
-# Configure Nginx & Supervisor
+# Configure Nginx, PHP-FPM & Supervisor
 COPY docker/nginx.conf /etc/nginx/sites-available/default
+COPY docker/php-fpm.conf /usr/local/etc/php-fpm.d/zz-docker.conf
 COPY docker/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 
