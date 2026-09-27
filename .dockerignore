@@ -1,0 +1,17 @@
+.git
+.github
+vendor
+node_modules
+whatsapp-gateway/node_modules
+meesho-bot/node_modules
+storage/app/whatsapp_session
+storage/app/meesho_session
+storage/app/public/labels/*
+storage/app/public/whatsapp_images/*
+storage/framework/cache/*
+storage/framework/sessions/*
+storage/framework/views/*
+storage/logs/*
+.env
+database/database.sqlite
+scratch

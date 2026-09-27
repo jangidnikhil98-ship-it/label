@@ -9,12 +9,22 @@ const {
     default: makeWASocket,
     useMultiFileAuthState,
     DisconnectReason,
-    fetchLatestBaileysVersion
+    fetchLatestBaileysVersion,
+    downloadMediaMessage
 } = require('@whiskeysockets/baileys');
 
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
+
+// Prevent unhandled network promise rejections (e.g. Baileys websocket timeouts) from crashing the gateway
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('Handled unhandledRejection:', reason?.message || reason);
+});
+
+process.on('uncaughtException', (err) => {
+    console.error('Handled uncaughtException:', err?.message || err);
+});
 
 const PORT = process.env.PORT || 3000;
 const LARAVEL_WEBHOOK_URL = process.env.LARAVEL_WEBHOOK_URL || 'http://127.0.0.1:8000/api/v1/whatsapp/webhook';
@@ -90,6 +100,34 @@ function getMessageTimestamp(msg) {
     return num > 1000000000000 ? Math.floor(num / 1000) : num;
 }
 
+async function downloadAndSaveImage(msg) {
+    if (!msg || !msg.message) return null;
+    const isImage = !!(msg.message.imageMessage || (msg.message.documentMessage && msg.message.documentMessage.mimetype?.startsWith('image/')));
+    if (!isImage) return null;
+
+    try {
+        const buffer = await downloadMediaMessage(
+            msg,
+            'buffer',
+            {},
+            { logger: pino({ level: 'silent' }) }
+        );
+        if (!buffer) return null;
+
+        const imagesDir = path.join(__dirname, '../storage/app/public/whatsapp_images');
+        if (!fs.existsSync(imagesDir)) fs.mkdirSync(imagesDir, { recursive: true });
+
+        const fileName = `wa_${msg.key.id || Date.now()}.jpg`;
+        const fullImgPath = path.join(imagesDir, fileName);
+        fs.writeFileSync(fullImgPath, buffer);
+        console.log(`Downloaded WhatsApp image: ${fileName}`);
+        return `whatsapp_images/${fileName}`;
+    } catch (err) {
+        console.error(`Failed to download image for message ${msg.key?.id}:`, err.message);
+        return null;
+    }
+}
+
 async function forwardMessageToLaravel(msg) {
     try {
         if (!msg.message) return null;
@@ -98,7 +136,13 @@ async function forwardMessageToLaravel(msg) {
         const pushName = msg.pushName || 'Customer';
         const textContent = extractMessageText(msg);
 
-        if (!textContent) return null;
+        // Download image if message contains an image attachment
+        let imagePath = null;
+        if (msg.message.imageMessage || (msg.message.documentMessage && msg.message.documentMessage.mimetype?.startsWith('image/'))) {
+            imagePath = await downloadAndSaveImage(msg);
+        }
+
+        if (!textContent && !imagePath) return null;
 
         const ts = getMessageTimestamp(msg);
 
@@ -107,10 +151,11 @@ async function forwardMessageToLaravel(msg) {
             message_id: msg.key.id,
             sender_phone: senderPhone,
             sender_name: pushName,
-            message_text: textContent,
+            message_text: textContent || '[Image Attachment]',
+            image_path: imagePath,
             timestamp: ts,
             raw_payload: msg
-        }, { timeout: 8000 });
+        }, { timeout: 15000 });
 
         return response.data;
     } catch (err) {
@@ -177,7 +222,7 @@ async function startWhatsAppGateway() {
         version,
         auth: state,
         logger: pino({ level: 'silent' }),
-        printQRInTerminal: true,
+        printQRInTerminal: false,
         syncFullHistory: true, // Request full history from WhatsApp Web sync
         shouldSyncHistoryMessage: () => true,
     });
@@ -338,7 +383,8 @@ app.post('/sync', async (req, res) => {
             // If ts is within requested days or zero
             if (ts === 0 || ts >= cutoffSec) {
                 const text = extractMessageText(msg);
-                if (text && text.trim().length > 0) {
+                const hasImage = !!(msg.message.imageMessage || (msg.message.documentMessage && msg.message.documentMessage.mimetype?.startsWith('image/')));
+                if ((text && text.trim().length > 0) || hasImage) {
                     messagesToSync.push(msg);
                 }
             }
@@ -346,15 +392,35 @@ app.post('/sync', async (req, res) => {
 
         console.log(`Found ${messagesToSync.length} eligible messages to sync.`);
 
-        const result = await forwardMessagesBatchToLaravel(messagesToSync);
+        const formattedMessages = [];
+        for (const msg of messagesToSync) {
+            const senderPhone = msg.key.remoteJid ? msg.key.remoteJid.split('@')[0] : '';
+            const pushName = msg.pushName || 'Customer';
+            const text = extractMessageText(msg);
+            const ts = getMessageTimestamp(msg);
+
+            let imagePath = null;
+            if (msg.message.imageMessage || (msg.message.documentMessage && msg.message.documentMessage.mimetype?.startsWith('image/'))) {
+                imagePath = await downloadAndSaveImage(msg);
+            }
+
+            if (text.trim().length > 0 || imagePath) {
+                formattedMessages.push({
+                    message_id: msg.key.id,
+                    sender_phone: senderPhone,
+                    sender_name: pushName,
+                    message_text: text || '[Image Attachment]',
+                    image_path: imagePath,
+                    timestamp: ts,
+                });
+            }
+        }
 
         res.json({
             success: true,
             days: days,
-            message: `Sync completed for the last ${days} days! Processed ${messagesToSync.length} WhatsApp message(s), created ${result.orders_created} new order(s), ${result.duplicates_skipped} duplicate(s) skipped.`,
-            processed_messages: messagesToSync.length,
-            orders_created: result.orders_created,
-            duplicates_skipped: result.duplicates_skipped,
+            processed_messages: formattedMessages.length,
+            messages: formattedMessages
         });
     } catch (err) {
         console.error('Error during message sync:', err);

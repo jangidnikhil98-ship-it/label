@@ -38,6 +38,9 @@ return [
     'whatsapp' => [
         'gateway_url' => env('WHATSAPP_GATEWAY_URL', 'http://127.0.0.1:3000'),
         'verify_token' => env('WHATSAPP_VERIFY_TOKEN', 'antigravity_token'),
+        'meta_token' => env('META_WHATSAPP_TOKEN'),
+        'meta_phone_id' => env('META_WHATSAPP_PHONE_NUMBER_ID'),
+        'meta_waba_id' => env('META_WHATSAPP_WABA_ID'),
     ],
 
     'meesho' => [

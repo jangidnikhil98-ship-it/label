@@ -7,6 +7,7 @@ use App\Models\Order;
 use App\Services\OrderExtractionService;
 use App\Services\WhatsAppGatewayService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
 class WhatsAppApiController extends Controller
@@ -43,29 +44,47 @@ class WhatsAppApiController extends Controller
             $senderPhone = $request->input('sender_phone') ?: $request->input('From');
             $senderName = $request->input('sender_name') ?: $request->input('ProfileName', 'Customer');
             $messageText = $request->input('message_text') ?: $request->input('Body', '');
+            $imagePath = $request->input('image_path');
+            $messageId = $request->input('message_id');
+            $timestamp = $request->input('timestamp');
 
-            if (empty($messageText) && $request->has('entry')) {
+            if ($request->has('entry')) {
                 // Meta Cloud API payload format
                 $entry = $request->input('entry.0.changes.0.value');
                 if (!empty($entry['messages'][0])) {
                     $msg = $entry['messages'][0];
                     $senderPhone = $msg['from'] ?? null;
                     $senderName = $entry['contacts'][0]['profile']['name'] ?? 'Customer';
-                    $messageText = $msg['text']['body'] ?? $msg['caption'] ?? '';
+                    $messageId = $msg['id'] ?? null;
+                    $timestamp = $msg['timestamp'] ?? null;
+
+                    $msgType = $msg['type'] ?? 'text';
+                    if ($msgType === 'text') {
+                        $messageText = $msg['text']['body'] ?? '';
+                    } elseif ($msgType === 'image') {
+                        $messageText = $msg['image']['caption'] ?? '';
+                        $mediaId = $msg['image']['id'] ?? null;
+                        if ($mediaId) {
+                            $imagePath = $this->downloadMetaMedia($mediaId);
+                        }
+                    } elseif ($msgType === 'document') {
+                        $messageText = $msg['document']['caption'] ?? '';
+                        $mediaId = $msg['document']['id'] ?? null;
+                        if ($mediaId && str_starts_with($msg['document']['mime_type'] ?? '', 'image/')) {
+                            $imagePath = $this->downloadMetaMedia($mediaId);
+                        }
+                    }
                 }
             }
 
-            if (empty($messageText)) {
-                return response()->json(['success' => false, 'message' => 'No message text found in payload.'], 400);
+            if (empty($messageText) && empty($imagePath)) {
+                return response()->json(['success' => false, 'message' => 'No message text or image found in payload.'], 400);
             }
 
-            $messageId = $request->input('message_id');
-            $timestamp = $request->input('timestamp');
-
             $extractionResult = $this->extractionService->processImport(
-                $messageText,
+                $messageText ?: '',
                 $senderName,
-                null,
+                $imagePath,
                 auth()->id() ?: 1,
                 $senderPhone,
                 $timestamp,
@@ -127,11 +146,12 @@ class WhatsAppApiController extends Controller
                 $senderName = $msgData['sender_name'] ?? 'Customer';
                 $messageId = $msgData['message_id'] ?? null;
                 $timestamp = $msgData['timestamp'] ?? null;
+                $imagePath = $msgData['image_path'] ?? null;
 
                 $extractionResult = $this->extractionService->processImport(
                     $text,
                     $senderName,
-                    null,
+                    $imagePath,
                     $userId,
                     $senderPhone,
                     $timestamp,
@@ -264,5 +284,51 @@ class WhatsAppApiController extends Controller
     public function disconnectGateway()
     {
         return response()->json($this->gatewayService->disconnect());
+    }
+
+    /**
+     * Download media from Meta Graph API using Media ID.
+     */
+    protected function downloadMetaMedia(string $mediaId): ?string
+    {
+        $token = config('services.whatsapp.meta_token');
+        if (!$token) {
+            Log::warning("Cannot download Meta media {$mediaId}: META_WHATSAPP_TOKEN not configured in .env.");
+            return null;
+        }
+
+        try {
+            // Step 1: Get media URL from Graph API
+            $metaRes = Http::withToken($token)->timeout(12)->get("https://graph.facebook.com/v21.0/{$mediaId}");
+            if (!$metaRes->successful()) {
+                Log::error("Failed to query Meta Graph API for media {$mediaId}: " . $metaRes->body());
+                return null;
+            }
+
+            $mediaUrl = $metaRes->json('url');
+            if (!$mediaUrl) {
+                return null;
+            }
+
+            // Step 2: Download media binary
+            $downloadRes = Http::withToken($token)->timeout(25)->get($mediaUrl);
+            if (!$downloadRes->successful()) {
+                Log::error("Failed to download media binary from Meta for media {$mediaId}");
+                return null;
+            }
+
+            $dir = storage_path('app/public/whatsapp_images');
+            if (!file_exists($dir)) {
+                mkdir($dir, 0755, true);
+            }
+
+            $fileName = "meta_img_{$mediaId}.jpg";
+            file_put_contents("{$dir}/{$fileName}", $downloadRes->body());
+
+            return "whatsapp_images/{$fileName}";
+        } catch (\Exception $e) {
+            Log::error("Exception downloading Meta media {$mediaId}: " . $e->getMessage());
+            return null;
+        }
     }
 }

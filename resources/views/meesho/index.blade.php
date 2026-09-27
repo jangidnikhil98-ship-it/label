@@ -111,7 +111,7 @@
             <div class="card border-0 shadow-sm h-100">
                 <div class="card-header bg-white py-3 border-bottom">
                     <h6 class="mb-0 fw-bold d-flex align-items-center">
-                        <i class="bi bi-diagram-3 text-success me-2 fs-5"></i> Automated WhatsApp $\rightarrow$ Meesho Pipeline
+                        <i class="bi bi-diagram-3 text-success me-2 fs-5"></i> Automated WhatsApp &rarr; Meesho Pipeline
                     </h6>
                 </div>
                 <div class="card-body">

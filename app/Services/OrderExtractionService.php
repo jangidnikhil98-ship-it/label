@@ -44,7 +44,10 @@ class OrderExtractionService
         foreach ($orderIdPatterns as $pattern) {
             if (preg_match($pattern, $text, $matches)) {
                 $candidate = trim($matches[1]);
-                // Ensure candidate is not a phone number (10 digits starting 6-9)
+                // Ensure candidate contains at least one digit and is not a phone number
+                if (!preg_match('/\d/', $candidate)) {
+                    continue;
+                }
                 if (strlen($candidate) < 10 || !preg_match('/^[6-9]\d{9}$/', $candidate)) {
                     $orderId = strtoupper($candidate);
                     break;
@@ -97,6 +100,9 @@ class OrderExtractionService
             if (preg_match_all($pattern, $text, $matches)) {
                 foreach ($matches[1] as $candidate) {
                     $candidate = strtoupper(trim($candidate));
+                    if (!preg_match('/\d/', $candidate)) {
+                        continue;
+                    }
                     if (strlen($candidate) < 10 || !preg_match('/^[6-9]\d{9}$/', $candidate)) {
                         $orderIds[] = $candidate;
                     }
@@ -123,11 +129,26 @@ class OrderExtractionService
         $userId = $userId ?: auth()->id();
         $textToParse = $rawText;
 
-        if ($imagePath && empty(trim($textToParse))) {
-            $textToParse = $this->ocrService->extractTextFromImage($imagePath);
-        }
-
+        // 1. First attempt: parse order details from message text/caption
         $parsed = $this->parseMessageText($textToParse);
+
+        // 2. Condition: If no Order ID found in text, but an image was attached, run OCR on the image!
+        if (empty($parsed['order_id']) && !empty($imagePath)) {
+            $ocrText = $this->ocrService->extractTextFromImage($imagePath);
+            if (!empty($ocrText)) {
+                $imageParsed = $this->parseMessageText($ocrText);
+                if (!empty($imageParsed['order_id'])) {
+                    $parsed['order_id'] = $imageParsed['order_id'];
+                    $parsed['confidence'] = 90.00;
+                }
+                if (empty($parsed['phone_number']) && !empty($imageParsed['phone_number'])) {
+                    $parsed['phone_number'] = $imageParsed['phone_number'];
+                }
+                if (empty($parsed['customer_name']) && !empty($imageParsed['customer_name'])) {
+                    $parsed['customer_name'] = $imageParsed['customer_name'];
+                }
+            }
+        }
 
         // If no phone was in text, use sender's WhatsApp phone if provided
         if (empty($parsed['phone_number']) && !empty($senderPhone)) {

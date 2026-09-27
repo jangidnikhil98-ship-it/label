@@ -1,0 +1,32 @@
+services:
+  - type: web
+    name: label-orders-manager
+    runtime: docker
+    plan: free
+    region: oregon
+    dockerfilePath: Dockerfile
+    envVars:
+      - key: APP_NAME
+        value: "Label & Orders Manager"
+      - key: APP_ENV
+        value: production
+      - key: APP_DEBUG
+        value: "false"
+      - key: LOG_CHANNEL
+        value: stderr
+      - key: DB_CONNECTION
+        value: sqlite
+      - key: SESSION_DRIVER
+        value: cookie
+      - key: CACHE_STORE
+        value: file
+      - key: QUEUE_CONNECTION
+        value: sync
+      - key: WHATSAPP_VERIFY_TOKEN
+        value: antigravity_token
+      - key: META_WHATSAPP_TOKEN
+        sync: false
+      - key: META_WHATSAPP_PHONE_NUMBER_ID
+        sync: false
+      - key: META_WHATSAPP_WABA_ID
+        sync: false

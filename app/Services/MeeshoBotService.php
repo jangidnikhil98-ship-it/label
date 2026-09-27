@@ -83,7 +83,7 @@ class MeeshoBotService
     public function launchBrowserLogin(): array
     {
         try {
-            $response = Http::timeout(10)->post("{$this->botUrl}/api/meesho/login/launch");
+            $response = Http::timeout(20)->post("{$this->botUrl}/api/meesho/login/launch");
             return $response->json();
         } catch (\Exception $e) {
             return [
